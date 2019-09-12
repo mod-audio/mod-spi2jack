@@ -1,0 +1,4 @@
+mod-jack2spi
+mod-jack2spi.so
+mod-spi2jack
+mod-spi2jack.so
