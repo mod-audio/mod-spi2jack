@@ -10,6 +10,9 @@
 CC  ?= $(CROSS_COMPILE)gcc
 CXX ?= $(CROSS_COMPILE)g++
 
+PREFIX ?= /usr/local
+BINDIR  = $(PREFIX)/bin
+
 # ---------------------------------------------------------------------------------------------------------------------
 # Set build and link flags
 
@@ -38,6 +41,7 @@ LINK_FLAGS      = $(LINK_OPTS) $(LDFLAGS) -Wl,--no-undefined
 
 JACK_CFLAGS = $(shell pkg-config --cflags jack)
 JACK_LIBS   = $(shell pkg-config --libs jack)
+JACK_LIBDIR = $(shell pkg-config --variable=libdir jack)
 
 # ---------------------------------------------------------------------------------------------------------------------
 # Strict test build
@@ -81,5 +85,12 @@ mod-jack2spi.so: jack2spi.c
 
 clean:
 	$(RM) $(TARGETS)
+
+install: all
+	install -d $(DESTDIR)$(BINDIR)
+	install -m 755 mod-spi2jack mod-jack2spi $(DESTDIR)$(BINDIR)
+
+	install -d $(DESTDIR)$(JACK_LIBDIR)/jack
+	install -m 644 mod-spi2jack.so mod-jack2spi.so $(DESTDIR)$(JACK_LIBDIR)/jack/
 
 # ---------------------------------------------------------------------------------------------------------------------
