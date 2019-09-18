@@ -38,7 +38,7 @@
 // needed because we prefer jack2 which doesn't always have working metadata
 #define JackPortIsControlVoltage 0x100
 
-#define MAX_RAW_IIO_VALUE 4096
+#define MAX_RAW_IIO_VALUE 4095
 
 typedef struct {
   jack_client_t* client;

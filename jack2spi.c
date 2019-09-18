@@ -38,7 +38,7 @@
 // needed because we prefer jack2 which doesn't always have working metadata
 #define JackPortIsControlVoltage 0x100
 
-#define MAX_RAW_IIO_VALUE 4096
+#define MAX_RAW_IIO_VALUE 4095
 
 typedef struct {
   jack_client_t* client;
@@ -50,11 +50,20 @@ typedef struct {
   pthread_t thread;
 } jack2spi_t;
 
-static inline void write_spi_value(const char* const filename, const float value)
+static inline void write_spi_value(const char* const filename, float value)
 {
-    static char buf[64]; // FIXME
+    static char buf[16]; // FIXME
 
-    snprintf(buf, sizeof(buf), "%f\n", value);
+    // 0 to 1 range
+    uint16_t rvalue;
+    if (value <= 0.0f)
+        rvalue = 0;
+    else if (value >= 1.0f)
+        rvalue = MAX_RAW_IIO_VALUE;
+    else
+        rvalue = (uint16_t)(int)(value * MAX_RAW_IIO_VALUE + 0.5f);
+
+    snprintf(buf, sizeof(buf), "%u\n", rvalue);
     buf[sizeof(buf)-1] = '\0';
 
     FILE* const f = fopen(filename, "wb");
