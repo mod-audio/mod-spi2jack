@@ -16,7 +16,7 @@ BINDIR  = $(PREFIX)/bin
 # ---------------------------------------------------------------------------------------------------------------------
 # Set build and link flags
 
-BASE_FLAGS = -Wall -Wextra -pipe -fPIC -DPIC
+BASE_FLAGS = -Wall -Wextra -pipe -fPIC -DPIC -pthread
 BASE_OPTS  = -O2 -ffast-math -fdata-sections -ffunction-sections
 LINK_OPTS  = -fdata-sections -ffunction-sections -Wl,--gc-sections -Wl,-O1 -Wl,--as-needed
 

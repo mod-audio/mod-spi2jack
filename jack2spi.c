@@ -15,8 +15,9 @@
  * along with mod-spi2jack.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <stdlib.h>
+#include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -24,30 +25,72 @@
 #include <jack/metadata.h>
 #include <jack/uuid.h>
 
+#include <pthread.h>
+
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+
 #include "jackey.h"
 
 // custom jack flag used for cv
 // needed because we prefer jack2 which doesn't always have working metadata
 #define JackPortIsControlVoltage 0x100
 
+#define MAX_RAW_IIO_VALUE 4096
+
 typedef struct {
   jack_client_t* client;
   jack_port_t* port1;
   jack_port_t* port2;
+  float value1, value2;
+  // FILE *out1f, *out2f; // TODO
+  volatile bool run;
+  pthread_t thread;
 } jack2spi_t;
 
-static int process_callback(jack_nframes_t nframes, void *arg)
+static inline void write_spi_value(const char* const filename, const float value)
+{
+    static char buf[64]; // FIXME
+
+    snprintf(buf, sizeof(buf), "%f\n", value);
+    buf[sizeof(buf)-1] = '\0';
+
+    FILE* const f = fopen(filename, "wb");
+    if (f) {
+        fwrite(buf, strlen(buf)+1, 1, f);
+        fclose(f);
+    }
+}
+
+void* write_spi_thread(void* ptr)
+{
+    jack2spi_t* const jack2spi = (jack2spi_t*)ptr;
+
+    // TODO test if writting newline without close is enough
+    while (jack2spi->run) {
+        usleep(50000); // 50ms
+
+        write_spi_value("/sys/bus/iio/devices/iio:device1/out_voltage0_raw", jack2spi->value1);
+        write_spi_value("/sys/bus/iio/devices/iio:device1/out_voltage1_raw", jack2spi->value2);
+    }
+
+    return NULL;
+}
+
+static int process_callback(jack_nframes_t nframes, void* arg)
 {
     jack2spi_t* const jack2spi = (jack2spi_t*)arg;
 
     float* const port1buf = jack_port_get_buffer(jack2spi->port1, nframes);
     float* const port2buf = jack_port_get_buffer(jack2spi->port2, nframes);
 
-    return 0;
+    // FIXME this is awful!
+    jack2spi->value1 = port1buf[0];
+    jack2spi->value2 = port2buf[0];
 
-    // TODO
-    (void)port1buf;
-    (void)port2buf;
+    return 0;
 }
 
 JACK_LIB_EXPORT
@@ -58,6 +101,27 @@ int jack_initialize(jack_client_t* client, const char* load_init)
       fprintf(stderr, "Out of memory\n");
       return EXIT_FAILURE;
     }
+
+    jack2spi->value1 = 0.0f;
+    jack2spi->value2 = 0.0f;
+    jack2spi->run = true;
+
+    // setup writing thread
+    pthread_attr_t attributes;
+    pthread_attr_init(&attributes);
+    pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_JOINABLE);
+    pthread_attr_setinheritsched(&attributes, PTHREAD_EXPLICIT_SCHED);
+    pthread_attr_setscope(&attributes, (client != NULL) ? PTHREAD_SCOPE_PROCESS : PTHREAD_SCOPE_SYSTEM);
+    pthread_attr_setschedpolicy(&attributes, SCHED_FIFO);
+
+    struct sched_param rt_param;
+    memset(&rt_param, 0, sizeof(rt_param));
+    rt_param.sched_priority = 78;
+
+    pthread_attr_setschedparam(&attributes, &rt_param);
+
+    pthread_create(&jack2spi->thread, &attributes, write_spi_thread, (void*)jack2spi);
+    pthread_attr_destroy(&attributes);
 
     jack2spi->client = client;
 
@@ -97,6 +161,7 @@ int jack_initialize(jack_client_t* client, const char* load_init)
     jack_set_process_callback(client, process_callback, jack2spi);
 
     // done
+    jack2spi->run = true;
     jack_activate(client);
     return EXIT_SUCCESS;
 
@@ -109,7 +174,9 @@ void jack_finish(void* arg)
 {
     jack2spi_t* const jack2spi = (jack2spi_t*)arg;
 
+    jack2spi->run = false;
     jack_deactivate(jack2spi->client);
+    pthread_join(jack2spi->thread, NULL);
     jack_port_unregister(jack2spi->client, jack2spi->port1);
     jack_port_unregister(jack2spi->client, jack2spi->port2);
     free(jack2spi);
