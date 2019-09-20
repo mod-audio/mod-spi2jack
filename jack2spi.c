@@ -45,44 +45,67 @@ typedef struct {
   jack_port_t* port1;
   jack_port_t* port2;
   float value1, value2;
-  // FILE *out1f, *out2f; // TODO
+  FILE *out1f, *out2f;
   volatile bool run;
   pthread_t thread;
 } jack2spi_t;
-
-static inline void write_spi_value(const char* const filename, float value)
-{
-    static char buf[16]; // FIXME
-
-    // 0 to 1 range
-    uint16_t rvalue;
-    if (value <= 0.0f)
-        rvalue = 0;
-    else if (value >= 1.0f)
-        rvalue = MAX_RAW_IIO_VALUE;
-    else
-        rvalue = (uint16_t)(int)(value * MAX_RAW_IIO_VALUE + 0.5f);
-
-    snprintf(buf, sizeof(buf), "%u\n", rvalue);
-    buf[sizeof(buf)-1] = '\0';
-
-    FILE* const f = fopen(filename, "wb");
-    if (f) {
-        fwrite(buf, strlen(buf)+1, 1, f);
-        fclose(f);
-    }
-}
 
 void* write_spi_thread(void* ptr)
 {
     jack2spi_t* const jack2spi = (jack2spi_t*)ptr;
 
+    FILE* const out1f = jack2spi->out1f;
+    FILE* const out2f = jack2spi->out2f;
+
+    char buf[12];
+    float value;
+    uint16_t rvalue;
+
     // TODO test if writting newline without close is enough
     while (jack2spi->run) {
         usleep(50000); // 50ms
 
-        write_spi_value("/sys/bus/iio/devices/iio:device1/out_voltage0_raw", jack2spi->value1);
-        write_spi_value("/sys/bus/iio/devices/iio:device1/out_voltage1_raw", jack2spi->value2);
+        // out1
+        value = jack2spi->value1;
+        if (value <= 0.0f)
+            rvalue = 0;
+        else if (value >= 1.0f)
+            rvalue = MAX_RAW_IIO_VALUE;
+        else
+            rvalue = (uint16_t)(int)(value * MAX_RAW_IIO_VALUE + 0.5f);
+
+        if (snprintf(buf, sizeof(buf), "%u\n", rvalue) >= (int)sizeof(buf)-1)
+        {
+            buf[sizeof(buf)-2] = '\n';
+            buf[sizeof(buf)-1] = '\0';
+        }
+        else
+        {
+            buf[sizeof(buf)-1] = '\0';
+        }
+
+        fwrite(buf, strlen(buf)+1, 1, out1f);
+
+        // out2
+        value = jack2spi->value2;
+        if (value <= 0.0f)
+            rvalue = 0;
+        else if (value >= 1.0f)
+            rvalue = MAX_RAW_IIO_VALUE;
+        else
+            rvalue = (uint16_t)(int)(value * MAX_RAW_IIO_VALUE + 0.5f);
+
+        if (snprintf(buf, sizeof(buf), "%u\n", rvalue) >= (int)sizeof(buf)-1)
+        {
+            buf[sizeof(buf)-2] = '\n';
+            buf[sizeof(buf)-1] = '\0';
+        }
+        else
+        {
+            buf[sizeof(buf)-1] = '\0';
+        }
+
+        fwrite(buf, strlen(buf)+1, 1, out2f);
     }
 
     return NULL;
@@ -105,6 +128,38 @@ static int process_callback(jack_nframes_t nframes, void* arg)
 JACK_LIB_EXPORT
 int jack_initialize(jack_client_t* client, const char* load_init)
 {
+    FILE* const fname = fopen("/sys/bus/iio/devices/iio:device1/name", "wb");
+
+    if (!fname) {
+      fprintf(stderr, "Cannot get iio device\n");
+      return EXIT_FAILURE;
+    }
+
+    char namebuf[32];
+    if (fread(namebuf, sizeof(namebuf), 1, fname) == 0 && feof(fname) == 0) {
+        fprintf(stderr, "Cannot read iio device name\n");
+        return EXIT_FAILURE;
+    }
+
+    namebuf[sizeof(namebuf)-1] = '\0';
+    namebuf[strlen(namebuf)-1] = '\0';
+    fprintf(stdout, "Opening iio device '%s'...\n", namebuf);
+
+    fclose(fname);
+
+    FILE* const out1f = fopen("/sys/bus/iio/devices/iio:device1/out_voltage0_raw", "rb");
+    if (!out1f) {
+        fprintf(stderr, "Cannot get iio raw input 1 file\n");
+        return EXIT_FAILURE;
+    }
+
+    FILE* const out2f = fopen("/sys/bus/iio/devices/iio:device1/out_voltage1_raw", "rb");
+    if (!out2f) {
+        fprintf(stderr, "Cannot get iio raw input 1 file\n");
+        fclose(out2f);
+        return EXIT_FAILURE;
+    }
+
     jack2spi_t* const jack2spi = malloc(sizeof(jack2spi_t));
     if (!jack2spi) {
       fprintf(stderr, "Out of memory\n");
@@ -113,6 +168,8 @@ int jack_initialize(jack_client_t* client, const char* load_init)
 
     jack2spi->value1 = 0.0f;
     jack2spi->value2 = 0.0f;
+    jack2spi->out1f = out1f;
+    jack2spi->out2f = out2f;
     jack2spi->run = true;
 
     // setup writing thread
@@ -141,6 +198,8 @@ int jack_initialize(jack_client_t* client, const char* load_init)
 
     if (!jack2spi->port1 || !jack2spi->port2) {
         fprintf(stderr, "Can't register jack ports\n");
+        fclose(out1f);
+        fclose(out2f);
         free(jack2spi);
         return EXIT_FAILURE;
     }
@@ -170,8 +229,9 @@ int jack_initialize(jack_client_t* client, const char* load_init)
     jack_set_process_callback(client, process_callback, jack2spi);
 
     // done
-    jack2spi->run = true;
     jack_activate(client);
+    fprintf(stdout, "All good, let's roll!\n");
+
     return EXIT_SUCCESS;
 
     // TODO do something with `load_init`
@@ -185,7 +245,11 @@ void jack_finish(void* arg)
 
     jack2spi->run = false;
     jack_deactivate(jack2spi->client);
+
     pthread_join(jack2spi->thread, NULL);
+    fclose(jack2spi->out1f);
+    fclose(jack2spi->out2f);
+
     jack_port_unregister(jack2spi->client, jack2spi->port1);
     jack_port_unregister(jack2spi->client, jack2spi->port2);
     free(jack2spi);
