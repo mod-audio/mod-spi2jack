@@ -84,6 +84,7 @@ void* write_spi_thread(void* ptr)
             buf[sizeof(buf)-1] = '\0';
         }
 
+        rewind(out1f);
         fwrite(buf, strlen(buf)+1, 1, out1f);
 
         // out2
@@ -105,6 +106,7 @@ void* write_spi_thread(void* ptr)
             buf[sizeof(buf)-1] = '\0';
         }
 
+        rewind(out2f);
         fwrite(buf, strlen(buf)+1, 1, out2f);
     }
 
@@ -128,7 +130,7 @@ static int process_callback(jack_nframes_t nframes, void* arg)
 JACK_LIB_EXPORT
 int jack_initialize(jack_client_t* client, const char* load_init)
 {
-    FILE* const fname = fopen("/sys/bus/iio/devices/iio:device1/name", "wb");
+    FILE* const fname = fopen("/sys/bus/iio/devices/iio:device1/name", "rb");
 
     if (!fname) {
       fprintf(stderr, "Cannot get iio device\n");
@@ -147,13 +149,13 @@ int jack_initialize(jack_client_t* client, const char* load_init)
 
     fclose(fname);
 
-    FILE* const out1f = fopen("/sys/bus/iio/devices/iio:device1/out_voltage0_raw", "rb");
+    FILE* const out1f = fopen("/sys/bus/iio/devices/iio:device1/out_voltage0_raw", "wb");
     if (!out1f) {
         fprintf(stderr, "Cannot get iio raw input 1 file\n");
         return EXIT_FAILURE;
     }
 
-    FILE* const out2f = fopen("/sys/bus/iio/devices/iio:device1/out_voltage1_raw", "rb");
+    FILE* const out2f = fopen("/sys/bus/iio/devices/iio:device1/out_voltage1_raw", "wb");
     if (!out2f) {
         fprintf(stderr, "Cannot get iio raw input 1 file\n");
         fclose(out2f);
