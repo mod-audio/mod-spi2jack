@@ -34,6 +34,13 @@
 
 #include "jackey.h"
 
+/*
+ * TODO:
+ *  1. device number from args
+ *  2. use semaphore to trigger write thread (jack unlocks, write thread waits)
+ *  3. use counter (sample resolution) to trigger semaphore
+ */
+
 // custom jack flag used for cv
 // needed because we prefer jack2 which doesn't always have working metadata
 #define JackPortIsControlVoltage 0x100

@@ -34,6 +34,13 @@
 
 #include "jackey.h"
 
+/*
+ * TODO:
+ *  1. device number from args
+ *  2. use old and target value, smooth transition in jack thread between them
+ *  3. add "time" (to wait) as option in args
+ */
+
 // custom jack flag used for cv
 // needed because we prefer jack2 which doesn't always have working metadata
 #define JackPortIsControlVoltage 0x100
