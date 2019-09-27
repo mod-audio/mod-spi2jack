@@ -60,6 +60,7 @@ typedef struct {
 static inline float read_first_raw_spi_value(FILE* const f)
 {
     char buf[64];
+    memset(buf, 0, sizeof(buf));
 
     if (fread(buf, sizeof(buf), 1, f) > 0 || feof(f)) {
         buf[sizeof(buf)-1] = '\0';
@@ -87,6 +88,7 @@ void* read_spi_thread(void* ptr)
         usleep(50000); // 50ms
 
         rewind(in1f);
+        memset(buf, 0, sizeof(buf));
 
         if (fread(buf, sizeof(buf), 1, in1f) > 0 || feof(in1f)) {
             buf[sizeof(buf)-1] = '\0';
@@ -94,6 +96,7 @@ void* read_spi_thread(void* ptr)
         }
 
         rewind(in2f);
+        memset(buf, 0, sizeof(buf));
 
         if (fread(buf, sizeof(buf), 1, in1f) > 0 || feof(in1f)) {
             buf[sizeof(buf)-1] = '\0';
