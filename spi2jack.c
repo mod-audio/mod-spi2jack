@@ -136,6 +136,7 @@ int jack_initialize(jack_client_t* client, const char* load_init)
     }
 
     char namebuf[32];
+    memset(namebuf, 0, sizeof(namebuf));
     if (fread(namebuf, sizeof(namebuf), 1, fname) == 0 && feof(fname) == 0) {
         fprintf(stderr, "Cannot read iio device name\n");
         return EXIT_FAILURE;
