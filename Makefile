@@ -72,10 +72,10 @@ TARGETS = mod-spi2jack mod-spi2jack.so mod-jack2spi mod-jack2spi.so
 all: $(TARGETS)
 
 mod-spi2jack: spi2jack.c
-	$(CC) $< $(JACK_CFLAGS) $(BUILD_C_FLAGS) $(JACK_LIBS) $(LINK_FLAGS) -o $@
+	$(CC) $< $(JACK_CFLAGS) $(BUILD_C_FLAGS) $(JACK_LIBS) $(LINK_FLAGS) -lm -o $@
 
 mod-spi2jack.so: spi2jack.c
-	$(CC) $< $(JACK_CFLAGS) $(BUILD_C_FLAGS) $(JACK_LIBS) $(LINK_FLAGS) -shared -o $@
+	$(CC) $< $(JACK_CFLAGS) $(BUILD_C_FLAGS) $(JACK_LIBS) $(LINK_FLAGS) -lm -shared -o $@
 
 mod-jack2spi: jack2spi.c
 	$(CC) $< $(JACK_CFLAGS) $(BUILD_C_FLAGS) $(JACK_LIBS) $(LINK_FLAGS) -o $@

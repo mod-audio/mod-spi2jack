@@ -28,6 +28,7 @@
 #include <pthread.h>
 
 #include <errno.h>
+#include <math.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -37,8 +38,6 @@
 /*
  * TODO:
  *  1. device number from args
- *  2. use old and target value, smooth transition in jack thread between them
- *  3. add "time" (to wait) as option in args
  */
 
 // custom jack flag used for cv
@@ -52,9 +51,12 @@ typedef struct {
   jack_port_t* port1;
   jack_port_t* port2;
   float value1, value2;
+  float prevvalue1, prevvalue2;
   FILE *in1f, *in2f;
   volatile bool run, ready;
   pthread_t thread;
+  jack_nframes_t bufsize_ns;
+  float bufsize_log;
 } spi2jack_t;
 
 static inline float read_first_raw_spi_value(FILE* const f)
@@ -80,12 +82,12 @@ void* read_spi_thread(void* ptr)
     char buf[64];
 
     // first read
-    spi2jack->value1 = read_first_raw_spi_value(in1f);
-    spi2jack->value2 = read_first_raw_spi_value(in2f);
+    spi2jack->prevvalue1 = spi2jack->value1 = read_first_raw_spi_value(in1f);
+    spi2jack->prevvalue2 = spi2jack->value2 = read_first_raw_spi_value(in2f);
     spi2jack->ready = true;
 
     while (spi2jack->run) {
-        usleep(50000); // 50ms
+        usleep(spi2jack->bufsize_ns);
 
         rewind(in1f);
         memset(buf, 0, sizeof(buf));
@@ -98,13 +100,172 @@ void* read_spi_thread(void* ptr)
         rewind(in2f);
         memset(buf, 0, sizeof(buf));
 
-        if (fread(buf, sizeof(buf), 1, in1f) > 0 || feof(in1f)) {
+        if (fread(buf, sizeof(buf), 1, in2f) > 0 || feof(in2f)) {
             buf[sizeof(buf)-1] = '\0';
             spi2jack->value2 = (float)atoi(buf) / MAX_RAW_IIO_VALUE;
         }
     }
 
     return NULL;
+}
+
+static int buffer_size_callback(jack_nframes_t bufsize, void* arg)
+{
+    spi2jack_t* const spi2jack = (spi2jack_t*)arg;
+
+    spi2jack->bufsize_ns = bufsize / jack_get_sample_rate(spi2jack->client);
+    spi2jack->bufsize_log = logf(bufsize);
+    return 0;
+}
+
+/* python3
+ import math
+ for i in range(128):
+     print("    %ff," % math.log(i+1))
+*/
+static float logfs[128] = {
+    0.000000f,
+    0.693147f,
+    1.098612f,
+    1.386294f,
+    1.609438f,
+    1.791759f,
+    1.945910f,
+    2.079442f,
+    2.197225f,
+    2.302585f,
+    2.397895f,
+    2.484907f,
+    2.564949f,
+    2.639057f,
+    2.708050f,
+    2.772589f,
+    2.833213f,
+    2.890372f,
+    2.944439f,
+    2.995732f,
+    3.044522f,
+    3.091042f,
+    3.135494f,
+    3.178054f,
+    3.218876f,
+    3.258097f,
+    3.295837f,
+    3.332205f,
+    3.367296f,
+    3.401197f,
+    3.433987f,
+    3.465736f,
+    3.496508f,
+    3.526361f,
+    3.555348f,
+    3.583519f,
+    3.610918f,
+    3.637586f,
+    3.663562f,
+    3.688879f,
+    3.713572f,
+    3.737670f,
+    3.761200f,
+    3.784190f,
+    3.806662f,
+    3.828641f,
+    3.850148f,
+    3.871201f,
+    3.891820f,
+    3.912023f,
+    3.931826f,
+    3.951244f,
+    3.970292f,
+    3.988984f,
+    4.007333f,
+    4.025352f,
+    4.043051f,
+    4.060443f,
+    4.077537f,
+    4.094345f,
+    4.110874f,
+    4.127134f,
+    4.143135f,
+    4.158883f,
+    4.174387f,
+    4.189655f,
+    4.204693f,
+    4.219508f,
+    4.234107f,
+    4.248495f,
+    4.262680f,
+    4.276666f,
+    4.290459f,
+    4.304065f,
+    4.317488f,
+    4.330733f,
+    4.343805f,
+    4.356709f,
+    4.369448f,
+    4.382027f,
+    4.394449f,
+    4.406719f,
+    4.418841f,
+    4.430817f,
+    4.442651f,
+    4.454347f,
+    4.465908f,
+    4.477337f,
+    4.488636f,
+    4.499810f,
+    4.510860f,
+    4.521789f,
+    4.532599f,
+    4.543295f,
+    4.553877f,
+    4.564348f,
+    4.574711f,
+    4.584967f,
+    4.595120f,
+    4.605170f,
+    4.615121f,
+    4.624973f,
+    4.634729f,
+    4.644391f,
+    4.653960f,
+    4.663439f,
+    4.672829f,
+    4.682131f,
+    4.691348f,
+    4.700480f,
+    4.709530f,
+    4.718499f,
+    4.727388f,
+    4.736198f,
+    4.744932f,
+    4.753590f,
+    4.762174f,
+    4.770685f,
+    4.779123f,
+    4.787492f,
+    4.795791f,
+    4.804021f,
+    4.812184f,
+    4.820282f,
+    4.828314f,
+    4.836282f,
+    4.844187f,
+    4.852030f
+};
+
+static inline
+float calculate_jack_value_for_128_bufsize(float value, float prevvalue, jack_nframes_t i)
+{
+    const float multiplier = logfs[i] / 4.852030f;
+    return value * multiplier + prevvalue * (1.0f - multiplier);
+}
+
+static inline
+float calculate_jack_value(float value, float prevvalue, jack_nframes_t i, float bufsizelog)
+{
+    const float multiplier = log(i+1) / bufsizelog;
+    return value * multiplier + prevvalue * (1.0f - multiplier);
 }
 
 static int process_callback(jack_nframes_t nframes, void* arg)
@@ -116,9 +277,25 @@ static int process_callback(jack_nframes_t nframes, void* arg)
 
     // FIXME this is awful!
     if (spi2jack->ready) {
-        for (jack_nframes_t i=0; i<nframes; ++i) {
-            port1buf[i] = spi2jack->value1;
-            port2buf[i] = spi2jack->value2;
+        const float value1     = spi2jack->value1;
+        const float value2     = spi2jack->value2;
+        const float prevvalue1 = spi2jack->prevvalue1;
+        const float prevvalue2 = spi2jack->prevvalue2;
+        spi2jack->prevvalue1   = value1;
+        spi2jack->prevvalue2   = value2;
+
+        if (nframes == 128) {
+            for (jack_nframes_t i=0; i<nframes; ++i) {
+                port1buf[i] = calculate_jack_value_for_128_bufsize(value1, prevvalue1, i);
+                port2buf[i] = calculate_jack_value_for_128_bufsize(value2, prevvalue2, i);
+            }
+        } else {
+            const float bufsizelog = spi2jack->bufsize_log;
+
+            for (jack_nframes_t i=0; i<nframes; ++i) {
+                port1buf[i] = calculate_jack_value(value1, prevvalue1, i, bufsizelog);
+                port2buf[i] = calculate_jack_value(value2, prevvalue2, i, bufsizelog);
+            }
         }
     } else {
         memset(port1buf, 0, sizeof(float)*nframes);
@@ -164,7 +341,7 @@ int jack_initialize(jack_client_t* client, const char* load_init)
         return EXIT_FAILURE;
     }
 
-    spi2jack_t* const spi2jack = malloc(sizeof(spi2jack_t));
+    spi2jack_t* const spi2jack = calloc(sizeof(spi2jack_t), 1);
     if (!spi2jack) {
       fprintf(stderr, "Out of memory\n");
       return EXIT_FAILURE;
@@ -192,6 +369,10 @@ int jack_initialize(jack_client_t* client, const char* load_init)
     pthread_attr_destroy(&attributes);
 
     spi2jack->client = client;
+
+    const float bufsizef = (float)jack_get_buffer_size(client);
+    spi2jack->bufsize_ns = bufsizef / jack_get_sample_rate(spi2jack->client);
+    spi2jack->bufsize_log = logf(bufsizef);
 
     // Register ports.
     const long unsigned port_flags = JackPortIsTerminal|JackPortIsPhysical|JackPortIsOutput|JackPortIsControlVoltage;
@@ -228,6 +409,7 @@ int jack_initialize(jack_client_t* client, const char* load_init)
     }
 
     // Set callbacks
+    jack_set_buffer_size_callback(client, buffer_size_callback, spi2jack);
     jack_set_process_callback(client, process_callback, spi2jack);
 
     // done
