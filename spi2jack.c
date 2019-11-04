@@ -264,7 +264,7 @@ float calculate_jack_value_for_128_bufsize(float value, float prevvalue, jack_nf
 static inline
 float calculate_jack_value(float value, float prevvalue, jack_nframes_t i, float bufsizelog)
 {
-    const float multiplier = log(i+1) / bufsizelog;
+    const float multiplier = logf(i+1) / bufsizelog;
     return value * multiplier + prevvalue * (1.0f - multiplier);
 }
 

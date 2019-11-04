@@ -39,6 +39,9 @@ LINK_FLAGS      = $(LINK_OPTS) $(LDFLAGS) -Wl,--no-undefined
 # ---------------------------------------------------------------------------------------------------------------------
 # Get JACK build and link flags
 
+ALSA_CFLAGS = $(shell pkg-config --cflags alsa)
+ALSA_LIBS   = $(shell pkg-config --libs alsa)
+
 JACK_CFLAGS = $(shell pkg-config --cflags jack)
 JACK_LIBS   = $(shell pkg-config --libs jack)
 JACK_LIBDIR = $(shell pkg-config --variable=libdir jack)
@@ -78,10 +81,10 @@ mod-spi2jack.so: spi2jack.c
 	$(CC) $< $(JACK_CFLAGS) $(BUILD_C_FLAGS) $(JACK_LIBS) $(LINK_FLAGS) -lm -shared -o $@
 
 mod-jack2spi: jack2spi.c
-	$(CC) $< $(JACK_CFLAGS) $(BUILD_C_FLAGS) $(JACK_LIBS) $(LINK_FLAGS) -o $@
+	$(CC) $< $(ALSA_CFLAGS) $(JACK_CFLAGS) $(BUILD_C_FLAGS) $(JACK_LIBS) $(ALSA_LIBS) $(LINK_FLAGS) -o $@
 
 mod-jack2spi.so: jack2spi.c
-	$(CC) $< $(JACK_CFLAGS) $(BUILD_C_FLAGS) $(JACK_LIBS) $(LINK_FLAGS) -shared -o $@
+	$(CC) $< $(ALSA_CFLAGS) $(JACK_CFLAGS) $(BUILD_C_FLAGS) $(JACK_LIBS) $(ALSA_LIBS) $(LINK_FLAGS) -shared -o $@
 
 clean:
 	$(RM) $(TARGETS)

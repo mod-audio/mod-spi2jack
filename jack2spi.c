@@ -21,6 +21,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <alsa/asoundlib.h>
+
 #include <jack/jack.h>
 #include <jack/metadata.h>
 #include <jack/uuid.h>
@@ -33,12 +35,14 @@
 #include <sys/types.h>
 
 #include "jackey.h"
+#include "mod-semaphore.h"
+
+#define ALSA_SOUNDCARD_DEFAULT_ID "DUOX"
+#define ALSA_CONTROL_HP_CV_MODE   "Headphone/CV Mode"
 
 /*
  * TODO:
  *  1. device number from args
- *  2. use semaphore to trigger write thread (jack unlocks, write thread waits)
- *  3. use counter (sample resolution) to trigger semaphore
  */
 
 // custom jack flag used for cv
@@ -53,11 +57,24 @@ typedef struct {
   jack_port_t* port2;
   float value1, value2;
   FILE *out1f, *out2f;
+  float* tmpSortArray;
   volatile bool run;
+  volatile bool cvEnabled;
   pthread_t thread;
+  sem_t sem;
+  // for knowing wherever the cv/hp mode is enabled or not
+  snd_mixer_t* mixer;
+  snd_mixer_elem_t* mixerElem;
 } jack2spi_t;
 
-void* write_spi_thread(void* ptr)
+static bool _get_alsa_switch_value(snd_mixer_elem_t* const elem)
+{
+    int val = 0;
+    snd_mixer_selem_get_playback_switch(elem, SND_MIXER_SCHN_MONO, &val);
+    return (val != 0);
+}
+
+static void* write_spi_thread(void* ptr)
 {
     jack2spi_t* const jack2spi = (jack2spi_t*)ptr;
 
@@ -65,23 +82,48 @@ void* write_spi_thread(void* ptr)
     FILE* const out2f = jack2spi->out2f;
 
     char buf[12];
-    float value;
-    uint16_t rvalue;
+    float value1, value2;
+    uint16_t rvalue1, rvalue2;
 
-    // TODO test if writting newline without close is enough
     while (jack2spi->run) {
-        usleep(50000); // 50ms
+        // handle mixer changes
+        if (jack2spi->mixer != NULL)
+        {
+            snd_mixer_handle_events(jack2spi->mixer);
+            jack2spi->cvEnabled = _get_alsa_switch_value(jack2spi->mixerElem);
+        }
 
-        // out1
-        value = jack2spi->value1;
-        if (value <= 0.0f)
-            rvalue = 0;
-        else if (value >= 1.0f)
-            rvalue = MAX_RAW_IIO_VALUE;
+        if (sem_timedwait_secs(&jack2spi->sem, 1) != 0)
+            continue;
+
+        // read the values as soon as we get unlocked
+        value1 = jack2spi->value1;
+        value2 = jack2spi->value2;
+
+        if (jack2spi->cvEnabled)
+        {
+            // out1
+            if (value1 <= 0.0f)
+                rvalue1 = 0;
+            else if (value1 >= 1.0f)
+                rvalue1 = MAX_RAW_IIO_VALUE;
+            else
+                rvalue1 = (uint16_t)(int)(value1 * MAX_RAW_IIO_VALUE + 0.5f);
+
+            // out2
+            if (value2 <= 0.0f)
+                rvalue2 = 0;
+            else if (value2 >= 1.0f)
+                rvalue2 = MAX_RAW_IIO_VALUE;
+            else
+                rvalue2 = (uint16_t)(int)(value2 * MAX_RAW_IIO_VALUE + 0.5f);
+        }
         else
-            rvalue = (uint16_t)(int)(value * MAX_RAW_IIO_VALUE + 0.5f);
+        {
+            rvalue1 = rvalue2 = 0;
+        }
 
-        if (snprintf(buf, sizeof(buf), "%u\n", rvalue) >= (int)sizeof(buf)-1)
+        if (snprintf(buf, sizeof(buf), "%u\n", rvalue1) >= (int)sizeof(buf)-1)
         {
             buf[sizeof(buf)-2] = '\n';
             buf[sizeof(buf)-1] = '\0';
@@ -94,16 +136,7 @@ void* write_spi_thread(void* ptr)
         rewind(out1f);
         fwrite(buf, strlen(buf)+1, 1, out1f);
 
-        // out2
-        value = jack2spi->value2;
-        if (value <= 0.0f)
-            rvalue = 0;
-        else if (value >= 1.0f)
-            rvalue = MAX_RAW_IIO_VALUE;
-        else
-            rvalue = (uint16_t)(int)(value * MAX_RAW_IIO_VALUE + 0.5f);
-
-        if (snprintf(buf, sizeof(buf), "%u\n", rvalue) >= (int)sizeof(buf)-1)
+        if (snprintf(buf, sizeof(buf), "%u\n", rvalue2) >= (int)sizeof(buf)-1)
         {
             buf[sizeof(buf)-2] = '\n';
             buf[sizeof(buf)-1] = '\0';
@@ -120,16 +153,56 @@ void* write_spi_thread(void* ptr)
     return NULL;
 }
 
+static inline float get_median_value(float* tmparray, const float* source, jack_nframes_t nframes)
+{
+    float temp;
+
+    memcpy(tmparray, source, sizeof(float)*nframes);
+
+    for (jack_nframes_t i=0; i < nframes ; i++)
+    {
+        for(jack_nframes_t j=0; j < nframes - 1; j++)
+        {
+            if (tmparray[j] > tmparray[j+1])
+            {
+                temp          = tmparray[j];
+                tmparray[j]   = tmparray[j+1];
+                tmparray[j+1] = temp;
+            }
+        }
+    }
+
+    return (tmparray[nframes-1] + tmparray[nframes/2])/2.0f;
+}
+
+static int bufsize_callback(jack_nframes_t nframes, void* arg)
+{
+    jack2spi_t* const jack2spi = (jack2spi_t*)arg;
+
+    free(jack2spi->tmpSortArray);
+    jack2spi->tmpSortArray = malloc(sizeof(float)*nframes);
+
+    return 0;
+}
+
 static int process_callback(jack_nframes_t nframes, void* arg)
 {
     jack2spi_t* const jack2spi = (jack2spi_t*)arg;
 
-    float* const port1buf = jack_port_get_buffer(jack2spi->port1, nframes);
-    float* const port2buf = jack_port_get_buffer(jack2spi->port2, nframes);
+    if (jack2spi->cvEnabled)
+    {
+        const float* const port1buf = jack_port_get_buffer(jack2spi->port1, nframes);
+        const float* const port2buf = jack_port_get_buffer(jack2spi->port2, nframes);
 
-    // FIXME this is awful!
-    jack2spi->value1 = port1buf[0];
-    jack2spi->value2 = port2buf[0];
+        jack2spi->value1 = get_median_value(jack2spi->tmpSortArray, port1buf, nframes);
+        jack2spi->value2 = get_median_value(jack2spi->tmpSortArray, port2buf, nframes);
+    }
+    else
+    {
+        jack2spi->value1 = jack2spi->value2 = 0.0f;
+    }
+
+    sem_post(&jack2spi->sem);
 
     return 0;
 }
@@ -170,17 +243,55 @@ int jack_initialize(jack_client_t* client, const char* load_init)
         return EXIT_FAILURE;
     }
 
-    jack2spi_t* const jack2spi = malloc(sizeof(jack2spi_t));
+    jack2spi_t* const jack2spi = calloc(1, sizeof(jack2spi_t));
     if (!jack2spi) {
       fprintf(stderr, "Out of memory\n");
       return EXIT_FAILURE;
     }
 
-    jack2spi->value1 = 0.0f;
-    jack2spi->value2 = 0.0f;
     jack2spi->out1f = out1f;
     jack2spi->out2f = out2f;
     jack2spi->run = true;
+
+    sem_init(&jack2spi->sem, 0, 0);
+
+    // setup alsa-mixer listener
+    if (snd_mixer_open(&jack2spi->mixer, SND_MIXER_ELEM_SIMPLE) == 0)
+    {
+        snd_mixer_selem_id_t* sid;
+
+        char soundcard[32] = "hw:";
+
+        const char* const cardname = getenv("MOD_SOUNDCARD");
+        if (cardname != NULL)
+            strncat(soundcard, cardname, 28);
+        else
+            strncat(soundcard, ALSA_SOUNDCARD_DEFAULT_ID, 28);
+
+        soundcard[31] = '\0';
+
+        if (snd_mixer_attach(jack2spi->mixer, soundcard) == 0 &&
+            snd_mixer_selem_register(jack2spi->mixer, NULL, NULL) == 0 &&
+            snd_mixer_load(jack2spi->mixer) == 0 &&
+            snd_mixer_selem_id_malloc(&sid) == 0)
+        {
+            snd_mixer_selem_id_set_index(sid, 0);
+            snd_mixer_selem_id_set_name(sid, ALSA_CONTROL_HP_CV_MODE);
+
+            jack2spi->mixerElem = snd_mixer_find_selem(jack2spi->mixer, sid);
+
+            if (jack2spi->mixerElem != NULL)
+                jack2spi->cvEnabled = _get_alsa_switch_value(jack2spi->mixerElem);
+
+            snd_mixer_selem_id_free(sid);
+        }
+
+        if (jack2spi->mixerElem == NULL)
+        {
+            snd_mixer_close(jack2spi->mixer);
+            jack2spi->mixer = NULL;
+        }
+    }
 
     // setup writing thread
     pthread_attr_t attributes;
@@ -235,7 +346,10 @@ int jack_initialize(jack_client_t* client, const char* load_init)
         jack_set_property(client, uuid2, JACKEY_ORDER, "2", NULL);
     }
 
+    jack2spi->tmpSortArray = malloc(sizeof(float)*jack_get_buffer_size(client));
+
     // Set callbacks
+    jack_set_buffer_size_callback(client, bufsize_callback, jack2spi);
     jack_set_process_callback(client, process_callback, jack2spi);
 
     // done
@@ -259,6 +373,8 @@ void jack_finish(void* arg)
     pthread_join(jack2spi->thread, NULL);
     fclose(jack2spi->out1f);
     fclose(jack2spi->out2f);
+    snd_mixer_close(jack2spi->mixer);
+    sem_destroy(&jack2spi->sem);
 
     jack_port_unregister(jack2spi->client, jack2spi->port1);
     jack_port_unregister(jack2spi->client, jack2spi->port2);
