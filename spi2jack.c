@@ -44,7 +44,8 @@
 // needed because we prefer jack2 which doesn't always have working metadata
 #define JackPortIsControlVoltage 0x100
 
-#define MAX_RAW_IIO_VALUE 4095
+#define MAX_RAW_IIO_VALUE   4095
+#define MAX_RAW_IIO_VALUE_f 4095.0f
 
 typedef struct {
   jack_client_t* client;
@@ -66,7 +67,7 @@ static inline float read_first_raw_spi_value(FILE* const f)
 
     if (fread(buf, sizeof(buf), 1, f) > 0 || feof(f)) {
         buf[sizeof(buf)-1] = '\0';
-        return (float)atoi(buf) / MAX_RAW_IIO_VALUE;
+        return (float)atoi(buf) / MAX_RAW_IIO_VALUE_f;
     }
 
     return 0.0f;
@@ -94,7 +95,7 @@ static void* read_spi_thread(void* ptr)
 
         if (fread(buf, sizeof(buf), 1, in1f) > 0 || feof(in1f)) {
             buf[sizeof(buf)-1] = '\0';
-            spi2jack->value1 = (float)atoi(buf) / MAX_RAW_IIO_VALUE;
+            spi2jack->value1 = (float)atoi(buf) / MAX_RAW_IIO_VALUE_f * 10.0f;
         }
 
         rewind(in2f);
@@ -102,7 +103,7 @@ static void* read_spi_thread(void* ptr)
 
         if (fread(buf, sizeof(buf), 1, in2f) > 0 || feof(in2f)) {
             buf[sizeof(buf)-1] = '\0';
-            spi2jack->value2 = (float)atoi(buf) / MAX_RAW_IIO_VALUE;
+            spi2jack->value2 = (float)atoi(buf) / MAX_RAW_IIO_VALUE_f * 10.0f;
         }
     }
 

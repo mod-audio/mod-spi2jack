@@ -49,7 +49,8 @@
 // needed because we prefer jack2 which doesn't always have working metadata
 #define JackPortIsControlVoltage 0x100
 
-#define MAX_RAW_IIO_VALUE 4095
+#define MAX_RAW_IIO_VALUE   4095
+#define MAX_RAW_IIO_VALUE_f 4095.0f
 
 typedef struct {
   jack_client_t* client;
@@ -105,18 +106,18 @@ static void* write_spi_thread(void* ptr)
             // out1
             if (value1 <= 0.0f)
                 rvalue1 = 0;
-            else if (value1 >= 1.0f)
+            else if (value1 >= 10.0f)
                 rvalue1 = MAX_RAW_IIO_VALUE;
             else
-                rvalue1 = (uint16_t)(int)(value1 * MAX_RAW_IIO_VALUE + 0.5f);
+                rvalue1 = (uint16_t)(int)(value1 / 10.0f * MAX_RAW_IIO_VALUE_f + 0.5f);
 
             // out2
             if (value2 <= 0.0f)
                 rvalue2 = 0;
-            else if (value2 >= 1.0f)
+            else if (value2 >= 10.0f)
                 rvalue2 = MAX_RAW_IIO_VALUE;
             else
-                rvalue2 = (uint16_t)(int)(value2 * MAX_RAW_IIO_VALUE + 0.5f);
+                rvalue2 = (uint16_t)(int)(value2 / 10.0f * MAX_RAW_IIO_VALUE_f + 0.5f);
         }
         else
         {
