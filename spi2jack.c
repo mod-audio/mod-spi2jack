@@ -72,7 +72,7 @@ static inline float read_first_raw_spi_value(FILE* const f)
     return 0.0f;
 }
 
-void* read_spi_thread(void* ptr)
+static void* read_spi_thread(void* ptr)
 {
     spi2jack_t* const spi2jack = (spi2jack_t*)ptr;
 
@@ -114,7 +114,7 @@ static int buffer_size_callback(jack_nframes_t bufsize, void* arg)
     spi2jack_t* const spi2jack = (spi2jack_t*)arg;
 
     spi2jack->bufsize_ns = bufsize / jack_get_sample_rate(spi2jack->client);
-    spi2jack->bufsize_log = logf(bufsize);
+    spi2jack->bufsize_log = logf((float)bufsize);
     return 0;
 }
 
@@ -264,7 +264,7 @@ float calculate_jack_value_for_128_bufsize(float value, float prevvalue, jack_nf
 static inline
 float calculate_jack_value(float value, float prevvalue, jack_nframes_t i, float bufsizelog)
 {
-    const float multiplier = logf(i+1) / bufsizelog;
+    const float multiplier = logf((float)(i+1)) / bufsizelog;
     return value * multiplier + prevvalue * (1.0f - multiplier);
 }
 
@@ -304,6 +304,12 @@ static int process_callback(jack_nframes_t nframes, void* arg)
 
     return 0;
 }
+
+JACK_LIB_EXPORT
+int jack_initialize(jack_client_t* client, const char* load_init);
+
+JACK_LIB_EXPORT
+void jack_finish(void* arg);
 
 JACK_LIB_EXPORT
 int jack_initialize(jack_client_t* client, const char* load_init)
@@ -370,9 +376,9 @@ int jack_initialize(jack_client_t* client, const char* load_init)
 
     spi2jack->client = client;
 
-    const float bufsizef = (float)jack_get_buffer_size(client);
-    spi2jack->bufsize_ns = bufsizef / jack_get_sample_rate(spi2jack->client);
-    spi2jack->bufsize_log = logf(bufsizef);
+    const uint bufsize = jack_get_buffer_size(client);
+    spi2jack->bufsize_ns = bufsize / jack_get_sample_rate(spi2jack->client);
+    spi2jack->bufsize_log = logf((float)bufsize);
 
     // Register ports.
     const long unsigned port_flags = JackPortIsTerminal|JackPortIsPhysical|JackPortIsOutput|JackPortIsControlVoltage;
@@ -439,7 +445,7 @@ void jack_finish(void* arg)
     free(spi2jack);
 }
 
-int main()
+int main(int argc, char* argv[])
 {
     jack_client_t* const client = jack_client_open("mod-spi2jack", JackNoStartServer, NULL);
 
@@ -457,4 +463,8 @@ int main()
 
     jack_finish(client);
     return EXIT_SUCCESS;
+
+    // unused
+    (void)argc;
+    (void)argv;
 }

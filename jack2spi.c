@@ -208,6 +208,12 @@ static int process_callback(jack_nframes_t nframes, void* arg)
 }
 
 JACK_LIB_EXPORT
+int jack_initialize(jack_client_t* client, const char* load_init);
+
+JACK_LIB_EXPORT
+void jack_finish(void* arg);
+
+JACK_LIB_EXPORT
 int jack_initialize(jack_client_t* client, const char* load_init)
 {
     FILE* const fname = fopen("/sys/bus/iio/devices/iio:device1/name", "rb");
@@ -381,7 +387,7 @@ void jack_finish(void* arg)
     free(jack2spi);
 }
 
-int main()
+int main(int argc, char* argv[])
 {
     jack_client_t* const client = jack_client_open("mod-jack2spi", JackNoStartServer, NULL);
 
@@ -399,4 +405,8 @@ int main()
 
     jack_finish(client);
     return EXIT_SUCCESS;
+
+    // unused
+    (void)argc;
+    (void)argv;
 }
