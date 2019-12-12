@@ -34,7 +34,6 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-#include "jackey.h"
 #include "mod-semaphore.h"
 
 #define ALSA_SOUNDCARD_DEFAULT_ID "DUOX"
@@ -342,15 +341,19 @@ int jack_initialize(jack_client_t* client, const char* load_init)
     if (!jack_uuid_empty(uuid1))
     {
         jack_set_property(client, uuid1, JACK_METADATA_PRETTY_NAME, "CV Playback 1", "text/plain");
-        jack_set_property(client, uuid1, JACKEY_SIGNAL_TYPE, "CV", "text/plain");
-        jack_set_property(client, uuid1, JACKEY_ORDER, "1", NULL);
+        jack_set_property(client, uuid1, JACK_METADATA_SIGNAL_TYPE, "CV", "text/plain");
+        jack_set_property(client, uuid1, JACK_METADATA_ORDER, "1", NULL);
+        jack_set_property(client, uuid1, "http://lv2plug.in/ns/lv2core#minimum", "0", NULL);
+        jack_set_property(client, uuid1, "http://lv2plug.in/ns/lv2core#maximum", "10", NULL);
     }
 
     if (!jack_uuid_empty(uuid2))
     {
         jack_set_property(client, uuid2, JACK_METADATA_PRETTY_NAME, "CV Playback 2", "text/plain");
-        jack_set_property(client, uuid2, JACKEY_SIGNAL_TYPE, "CV", "text/plain");
-        jack_set_property(client, uuid2, JACKEY_ORDER, "2", NULL);
+        jack_set_property(client, uuid2, JACK_METADATA_SIGNAL_TYPE, "CV", "text/plain");
+        jack_set_property(client, uuid2, JACK_METADATA_ORDER, "2", NULL);
+        jack_set_property(client, uuid2, "http://lv2plug.in/ns/lv2core#minimum", "0", NULL);
+        jack_set_property(client, uuid2, "http://lv2plug.in/ns/lv2core#maximum", "10", NULL);
     }
 
     jack2spi->tmpSortArray = malloc(sizeof(float)*jack_get_buffer_size(client));
