@@ -21,6 +21,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <alsa/asoundlib.h>
+
 #include <jack/jack.h>
 #include <jack/metadata.h>
 #include <jack/uuid.h>
@@ -32,6 +34,10 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+
+#define ALSA_SOUNDCARD_DEFAULT_ID   "DUOX"
+#define ALSA_CONTROL_CV_EXP_MODE    "CV/Exp.Pedal Mode"
+#define ALSA_CONTROL_EXP_PEDAL_MODE "Exp.Pedal Mode"
 
 /*
  * TODO:
@@ -45,25 +51,43 @@
 #define MAX_RAW_IIO_VALUE   4095
 #define MAX_RAW_IIO_VALUE_f 4095.0f
 
+typedef enum {
+  exp_pedal_mode_unused,
+  exp_pedal_mode_port1,
+  exp_pedal_mode_port2
+} exp_pedal_mode_t;
+
 typedef struct {
   jack_client_t* client;
   jack_port_t* port1;
   jack_port_t* port2;
-  float value1, value2;
+  jack_port_t* portPedal;
+  float value1, value2, valuePedal;
   float prevvalue1, prevvalue2;
   FILE *in1f, *in2f;
   volatile bool run, ready;
   pthread_t thread;
   jack_nframes_t bufsize_ns;
   float bufsize_log;
+  // for knowing whichever exp.pedal mode we are on
+  snd_mixer_t* mixer;
+  snd_mixer_elem_t *mixerCvExpMode, *mixerExpPedalMode;
 } spi2jack_t;
+
+static bool _get_alsa_switch_value(snd_mixer_elem_t* const elem)
+{
+    int val = 0;
+    snd_mixer_selem_get_playback_switch(elem, SND_MIXER_SCHN_MONO, &val);
+    return (val != 0);
+}
 
 static inline float read_first_raw_spi_value(FILE* const f)
 {
     char buf[64];
     memset(buf, 0, sizeof(buf));
 
-    if (fread(buf, sizeof(buf), 1, f) > 0 || feof(f)) {
+    if (fread(buf, sizeof(buf), 1, f) > 0 || feof(f))
+    {
         buf[sizeof(buf)-1] = '\0';
         return (float)atoi(buf) / MAX_RAW_IIO_VALUE_f;
     }
@@ -79,19 +103,41 @@ static void* read_spi_thread(void* ptr)
     FILE* const in2f = spi2jack->in2f;
 
     char buf[64];
+    exp_pedal_mode_t exp_pedal_mode = exp_pedal_mode_unused;
 
     // first read
     spi2jack->prevvalue1 = spi2jack->value1 = read_first_raw_spi_value(in1f);
     spi2jack->prevvalue2 = spi2jack->value2 = read_first_raw_spi_value(in2f);
     spi2jack->ready = true;
 
-    while (spi2jack->run) {
+    while (spi2jack->run)
+    {
+        // handle mixer changes
+        if (spi2jack->mixer != NULL)
+        {
+            snd_mixer_handle_events(spi2jack->mixer);
+
+            if (_get_alsa_switch_value(spi2jack->mixerCvExpMode))
+            {
+                // FIXME verify this
+                if (_get_alsa_switch_value(spi2jack->mixerExpPedalMode))
+                    exp_pedal_mode = exp_pedal_mode_port1;
+                else
+                    exp_pedal_mode = exp_pedal_mode_port2;
+            }
+            else
+            {
+                exp_pedal_mode = exp_pedal_mode_unused;
+            }
+        }
+
         usleep(spi2jack->bufsize_ns);
 
         rewind(in1f);
         memset(buf, 0, sizeof(buf));
 
-        if (fread(buf, sizeof(buf), 1, in1f) > 0 || feof(in1f)) {
+        if (fread(buf, sizeof(buf), 1, in1f) > 0 || feof(in1f))
+        {
             buf[sizeof(buf)-1] = '\0';
             spi2jack->value1 = (float)atoi(buf) / MAX_RAW_IIO_VALUE_f * 10.0f;
         }
@@ -99,9 +145,23 @@ static void* read_spi_thread(void* ptr)
         rewind(in2f);
         memset(buf, 0, sizeof(buf));
 
-        if (fread(buf, sizeof(buf), 1, in2f) > 0 || feof(in2f)) {
+        if (fread(buf, sizeof(buf), 1, in2f) > 0 || feof(in2f))
+        {
             buf[sizeof(buf)-1] = '\0';
             spi2jack->value2 = (float)atoi(buf) / MAX_RAW_IIO_VALUE_f * 10.0f;
+        }
+
+        switch (exp_pedal_mode)
+        {
+        case exp_pedal_mode_unused:
+            spi2jack->valuePedal = 0.0f;
+            break;
+        case exp_pedal_mode_port1:
+            spi2jack->valuePedal = spi2jack->value1;
+            break;
+        case exp_pedal_mode_port2:
+            spi2jack->valuePedal = spi2jack->value2;
+            break;
         }
     }
 
@@ -275,7 +335,8 @@ static int process_callback(jack_nframes_t nframes, void* arg)
     float* const port2buf = jack_port_get_buffer(spi2jack->port2, nframes);
 
     // FIXME this is awful!
-    if (spi2jack->ready) {
+    if (spi2jack->ready)
+    {
         const float value1     = spi2jack->value1;
         const float value2     = spi2jack->value2;
         const float prevvalue1 = spi2jack->prevvalue1;
@@ -283,20 +344,27 @@ static int process_callback(jack_nframes_t nframes, void* arg)
         spi2jack->prevvalue1   = value1;
         spi2jack->prevvalue2   = value2;
 
-        if (nframes == 128) {
-            for (jack_nframes_t i=0; i<nframes; ++i) {
+        if (nframes == 128)
+        {
+            for (jack_nframes_t i=0; i<nframes; ++i)
+            {
                 port1buf[i] = calculate_jack_value_for_128_bufsize(value1, prevvalue1, i);
                 port2buf[i] = calculate_jack_value_for_128_bufsize(value2, prevvalue2, i);
             }
-        } else {
+        }
+        else
+        {
             const float bufsizelog = spi2jack->bufsize_log;
 
-            for (jack_nframes_t i=0; i<nframes; ++i) {
+            for (jack_nframes_t i=0; i<nframes; ++i)
+            {
                 port1buf[i] = calculate_jack_value(value1, prevvalue1, i, bufsizelog);
                 port2buf[i] = calculate_jack_value(value2, prevvalue2, i, bufsizelog);
             }
         }
-    } else {
+    }
+    else
+    {
         memset(port1buf, 0, sizeof(float)*nframes);
         memset(port2buf, 0, sizeof(float)*nframes);
     }
@@ -315,14 +383,16 @@ int jack_initialize(jack_client_t* client, const char* load_init)
 {
     FILE* const fname = fopen("/sys/bus/iio/devices/iio:device0/name", "rb");
 
-    if (!fname) {
+    if (!fname)
+    {
       fprintf(stderr, "Cannot get iio device\n");
       return EXIT_FAILURE;
     }
 
     char namebuf[32];
     memset(namebuf, 0, sizeof(namebuf));
-    if (fread(namebuf, sizeof(namebuf), 1, fname) == 0 && feof(fname) == 0) {
+    if (fread(namebuf, sizeof(namebuf), 1, fname) == 0 && feof(fname) == 0)
+    {
         fprintf(stderr, "Cannot read iio device name\n");
         return EXIT_FAILURE;
     }
@@ -334,27 +404,70 @@ int jack_initialize(jack_client_t* client, const char* load_init)
     fclose(fname);
 
     FILE* const in1f = fopen("/sys/bus/iio/devices/iio:device0/in_voltage0_raw", "rb");
-    if (!in1f) {
+    if (!in1f)
+    {
         fprintf(stderr, "Cannot get iio raw input 1 file\n");
         return EXIT_FAILURE;
     }
 
     FILE* const in2f = fopen("/sys/bus/iio/devices/iio:device0/in_voltage1_raw", "rb");
-    if (!in2f) {
+    if (!in2f)
+    {
         fprintf(stderr, "Cannot get iio raw input 1 file\n");
         fclose(in2f);
         return EXIT_FAILURE;
     }
 
     spi2jack_t* const spi2jack = calloc(sizeof(spi2jack_t), 1);
-    if (!spi2jack) {
-      fprintf(stderr, "Out of memory\n");
-      return EXIT_FAILURE;
+    if (!spi2jack)
+    {
+        fprintf(stderr, "Out of memory\n");
+        return EXIT_FAILURE;
     }
 
     spi2jack->in1f = in1f;
     spi2jack->in2f = in2f;
     spi2jack->run = true;
+
+    // setup alsa-mixer listener
+    if (snd_mixer_open(&spi2jack->mixer, SND_MIXER_ELEM_SIMPLE) == 0)
+    {
+        snd_mixer_selem_id_t* sid;
+
+        char soundcard[32] = "hw:";
+
+        const char* const cardname = getenv("MOD_SOUNDCARD");
+        if (cardname != NULL)
+            strncat(soundcard, cardname, 28);
+        else
+            strncat(soundcard, ALSA_SOUNDCARD_DEFAULT_ID, 28);
+
+        soundcard[31] = '\0';
+
+        if (snd_mixer_attach(spi2jack->mixer, soundcard) == 0 &&
+            snd_mixer_selem_register(spi2jack->mixer, NULL, NULL) == 0 &&
+            snd_mixer_load(spi2jack->mixer) == 0 &&
+            snd_mixer_selem_id_malloc(&sid) == 0)
+        {
+            // CV/Exp Mode
+            snd_mixer_selem_id_set_index(sid, 0);
+            snd_mixer_selem_id_set_name(sid, ALSA_CONTROL_CV_EXP_MODE);
+            spi2jack->mixerCvExpMode = snd_mixer_find_selem(spi2jack->mixer, sid);
+
+            // Exp.Pedal Mode
+            snd_mixer_selem_id_set_index(sid, 0);
+            snd_mixer_selem_id_set_name(sid, ALSA_CONTROL_EXP_PEDAL_MODE);
+            spi2jack->mixerExpPedalMode = snd_mixer_find_selem(spi2jack->mixer, sid);
+
+            snd_mixer_selem_id_free(sid);
+        }
+
+        if (spi2jack->mixerCvExpMode == NULL || spi2jack->mixerExpPedalMode == NULL)
+        {
+            snd_mixer_close(spi2jack->mixer);
+            spi2jack->mixer = NULL;
+        }
+    }
 
     // setup reading thread
     pthread_attr_t attributes;
@@ -375,16 +488,18 @@ int jack_initialize(jack_client_t* client, const char* load_init)
 
     spi2jack->client = client;
 
-    const uint bufsize = jack_get_buffer_size(client);
+    const jack_nframes_t bufsize = jack_get_buffer_size(client);
     spi2jack->bufsize_ns = bufsize / jack_get_sample_rate(spi2jack->client);
     spi2jack->bufsize_log = logf((float)bufsize);
 
     // Register ports.
     const long unsigned port_flags = JackPortIsTerminal|JackPortIsPhysical|JackPortIsOutput|JackPortIsControlVoltage;
-    spi2jack->port1 = jack_port_register(client, "capture_1", JACK_DEFAULT_AUDIO_TYPE, port_flags, 0);
-    spi2jack->port2 = jack_port_register(client, "capture_2", JACK_DEFAULT_AUDIO_TYPE, port_flags, 0);
+    spi2jack->port1     = jack_port_register(client, "capture_1", JACK_DEFAULT_AUDIO_TYPE, port_flags, 0);
+    spi2jack->port2     = jack_port_register(client, "capture_2", JACK_DEFAULT_AUDIO_TYPE, port_flags, 0);
+    spi2jack->portPedal = jack_port_register(client, "exp_pedal", JACK_DEFAULT_AUDIO_TYPE, port_flags, 0);
 
-    if (!spi2jack->port1 || !spi2jack->port2) {
+    if (!spi2jack->port1 || !spi2jack->port2 || !spi2jack->portPedal)
+    {
         fprintf(stderr, "Can't register jack ports\n");
         fclose(in1f);
         fclose(in2f);
@@ -393,11 +508,13 @@ int jack_initialize(jack_client_t* client, const char* load_init)
     }
 
     // Set port aliases and metadata
-    jack_port_set_alias(spi2jack->port1, "CV Capture 1");
-    jack_port_set_alias(spi2jack->port2, "CV Capture 2");
+    jack_port_set_alias(spi2jack->port1,     "CV Capture 1");
+    jack_port_set_alias(spi2jack->port2,     "CV Capture 2");
+    jack_port_set_alias(spi2jack->portPedal, "Expression Pedal");
 
-    const jack_uuid_t uuid1 = jack_port_uuid(spi2jack->port1);
-    const jack_uuid_t uuid2 = jack_port_uuid(spi2jack->port2);
+    const jack_uuid_t uuid1     = jack_port_uuid(spi2jack->port1);
+    const jack_uuid_t uuid2     = jack_port_uuid(spi2jack->port2);
+    const jack_uuid_t uuidPedal = jack_port_uuid(spi2jack->portPedal);
 
     if (!jack_uuid_empty(uuid1))
     {
@@ -415,6 +532,15 @@ int jack_initialize(jack_client_t* client, const char* load_init)
         jack_set_property(client, uuid2, JACK_METADATA_ORDER, "2", NULL);
         jack_set_property(client, uuid2, "http://lv2plug.in/ns/lv2core#minimum", "0", NULL);
         jack_set_property(client, uuid2, "http://lv2plug.in/ns/lv2core#maximum", "10", NULL);
+    }
+
+    if (!jack_uuid_empty(uuidPedal))
+    {
+        jack_set_property(client, uuidPedal, JACK_METADATA_PRETTY_NAME, "Expression Pedal", "text/plain");
+        jack_set_property(client, uuidPedal, JACK_METADATA_SIGNAL_TYPE, "CV", "text/plain");
+        jack_set_property(client, uuidPedal, JACK_METADATA_ORDER, "3", NULL);
+        jack_set_property(client, uuidPedal, "http://lv2plug.in/ns/lv2core#minimum", "0", NULL);
+        jack_set_property(client, uuidPedal, "http://lv2plug.in/ns/lv2core#maximum", "10", NULL);
     }
 
     // Set callbacks
@@ -458,7 +584,7 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
 
-    if (jack_initialize(client, "") != EXIT_SUCCESS)
+    if (jack_initialize(client, argc > 1 ? argv[1] : "") != EXIT_SUCCESS)
         return EXIT_FAILURE;
 
     while (1)
@@ -466,8 +592,4 @@ int main(int argc, char* argv[])
 
     jack_finish(client);
     return EXIT_SUCCESS;
-
-    // unused
-    (void)argc;
-    (void)argv;
 }

@@ -52,12 +52,14 @@ JACK_LIBDIR = $(shell pkg-config --variable=libdir jack)
 ifeq ($(TESTBUILD),true)
 BASE_FLAGS += -Werror -Wabi=98 -Wcast-qual -Wclobbered -Wconversion -Wdisabled-optimization
 BASE_FLAGS += -Wdouble-promotion -Wfloat-equal -Wlogical-op -Wpointer-arith -Wsign-conversion
-BASE_FLAGS += -Wformat=2 -Woverlength-strings -Wstringop-overflow=4 -Wstringop-truncation
+BASE_FLAGS += -Wformat=2 -Woverlength-strings
+BASE_FLAGS += -Wformat-truncation=2 -Wformat-overflow=2
+BASE_FLAGS += -Wstringop-overflow=4 -Wstringop-truncation
 BASE_FLAGS += -Wmissing-declarations -Wredundant-decls
 BASE_FLAGS += -Wshadow  -Wundef -Wuninitialized -Wunused
 BASE_FLAGS += -Wstrict-aliasing -fstrict-aliasing
 BASE_FLAGS += -Wstrict-overflow -fstrict-overflow
-BASE_FLAGS += -Wduplicated-branches -Wduplicated-cond  -Wnull-dereference
+BASE_FLAGS += -Wduplicated-branches -Wduplicated-cond -Wnull-dereference
 CFLAGS     += -Winit-self -Wjump-misses-init -Wmissing-prototypes -Wnested-externs -Wstrict-prototypes -Wwrite-strings
 CXXFLAGS   += -Wc++0x-compat -Wc++11-compat
 CXXFLAGS   += -Wnon-virtual-dtor -Woverloaded-virtual
@@ -75,10 +77,10 @@ TARGETS = mod-spi2jack mod-spi2jack.so mod-jack2spi mod-jack2spi.so
 all: $(TARGETS)
 
 mod-spi2jack: spi2jack.c
-	$(CC) $< $(JACK_CFLAGS) $(BUILD_C_FLAGS) $(JACK_LIBS) $(LINK_FLAGS) -lm -o $@
+	$(CC) $< $(ALSA_CFLAGS) $(JACK_CFLAGS) $(BUILD_C_FLAGS) $(JACK_LIBS) $(ALSA_LIBS) $(LINK_FLAGS) -lm -o $@
 
 mod-spi2jack.so: spi2jack.c
-	$(CC) $< $(JACK_CFLAGS) $(BUILD_C_FLAGS) $(JACK_LIBS) $(LINK_FLAGS) -lm -shared -o $@
+	$(CC) $< $(ALSA_CFLAGS) $(JACK_CFLAGS) $(BUILD_C_FLAGS) $(JACK_LIBS) $(ALSA_LIBS) $(LINK_FLAGS) -lm -shared -o $@
 
 mod-jack2spi: jack2spi.c
 	$(CC) $< $(ALSA_CFLAGS) $(JACK_CFLAGS) $(BUILD_C_FLAGS) $(JACK_LIBS) $(ALSA_LIBS) $(LINK_FLAGS) -o $@

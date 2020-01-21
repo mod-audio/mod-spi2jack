@@ -85,7 +85,8 @@ static void* write_spi_thread(void* ptr)
     float value1, value2;
     uint16_t rvalue1, rvalue2;
 
-    while (jack2spi->run) {
+    while (jack2spi->run)
+    {
         // handle mixer changes
         if (jack2spi->mixer != NULL)
         {
@@ -161,7 +162,7 @@ static inline float get_median_value(float* tmparray, const float* source, jack_
 
     for (jack_nframes_t i=0; i < nframes ; i++)
     {
-        for(jack_nframes_t j=0; j < nframes - 1; j++)
+        for (jack_nframes_t j=0; j < nframes - 1; j++)
         {
             if (tmparray[j] > tmparray[j+1])
             {
@@ -218,14 +219,16 @@ int jack_initialize(jack_client_t* client, const char* load_init)
 {
     FILE* const fname = fopen("/sys/bus/iio/devices/iio:device1/name", "rb");
 
-    if (!fname) {
+    if (!fname)
+    {
       fprintf(stderr, "Cannot get iio device\n");
       return EXIT_FAILURE;
     }
 
     char namebuf[32];
     memset(namebuf, 0, sizeof(namebuf));
-    if (fread(namebuf, sizeof(namebuf), 1, fname) == 0 && feof(fname) == 0) {
+    if (fread(namebuf, sizeof(namebuf), 1, fname) == 0 && feof(fname) == 0)
+    {
         fprintf(stderr, "Cannot read iio device name\n");
         return EXIT_FAILURE;
     }
@@ -237,22 +240,25 @@ int jack_initialize(jack_client_t* client, const char* load_init)
     fclose(fname);
 
     FILE* const out1f = fopen("/sys/bus/iio/devices/iio:device1/out_voltage0_raw", "wb");
-    if (!out1f) {
+    if (!out1f)
+    {
         fprintf(stderr, "Cannot get iio raw input 1 file\n");
         return EXIT_FAILURE;
     }
 
     FILE* const out2f = fopen("/sys/bus/iio/devices/iio:device1/out_voltage1_raw", "wb");
-    if (!out2f) {
+    if (!out2f)
+    {
         fprintf(stderr, "Cannot get iio raw input 1 file\n");
         fclose(out2f);
         return EXIT_FAILURE;
     }
 
     jack2spi_t* const jack2spi = calloc(1, sizeof(jack2spi_t));
-    if (!jack2spi) {
-      fprintf(stderr, "Out of memory\n");
-      return EXIT_FAILURE;
+    if (!jack2spi)
+    {
+        fprintf(stderr, "Out of memory\n");
+        return EXIT_FAILURE;
     }
 
     jack2spi->out1f = out1f;
@@ -401,7 +407,7 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
 
-    if (jack_initialize(client, "") != EXIT_SUCCESS)
+    if (jack_initialize(client, argc > 1 ? argv[1] : "") != EXIT_SUCCESS)
         return EXIT_FAILURE;
 
     while (1)
@@ -409,8 +415,4 @@ int main(int argc, char* argv[])
 
     jack_finish(client);
     return EXIT_SUCCESS;
-
-    // unused
-    (void)argc;
-    (void)argv;
 }
