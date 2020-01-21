@@ -62,10 +62,11 @@ typedef struct {
   jack_port_t* port1;
   jack_port_t* port2;
   jack_port_t* portPedal;
-  float value1, value2, valuePedal;
+  float value1, value2;
   float prevvalue1, prevvalue2;
   FILE *in1f, *in2f;
   volatile bool run, ready;
+  volatile exp_pedal_mode_t exp_pedal_mode;
   pthread_t thread;
   jack_nframes_t bufsize_ns;
   float bufsize_log;
@@ -103,7 +104,6 @@ static void* read_spi_thread(void* ptr)
     FILE* const in2f = spi2jack->in2f;
 
     char buf[64];
-    exp_pedal_mode_t exp_pedal_mode = exp_pedal_mode_unused;
 
     // first read
     spi2jack->prevvalue1 = spi2jack->value1 = read_first_raw_spi_value(in1f);
@@ -112,25 +112,6 @@ static void* read_spi_thread(void* ptr)
 
     while (spi2jack->run)
     {
-        // handle mixer changes
-        if (spi2jack->mixer != NULL)
-        {
-            snd_mixer_handle_events(spi2jack->mixer);
-
-            if (_get_alsa_switch_value(spi2jack->mixerCvExpMode))
-            {
-                // FIXME verify this
-                if (_get_alsa_switch_value(spi2jack->mixerExpPedalMode))
-                    exp_pedal_mode = exp_pedal_mode_port1;
-                else
-                    exp_pedal_mode = exp_pedal_mode_port2;
-            }
-            else
-            {
-                exp_pedal_mode = exp_pedal_mode_unused;
-            }
-        }
-
         usleep(spi2jack->bufsize_ns);
 
         rewind(in1f);
@@ -151,17 +132,22 @@ static void* read_spi_thread(void* ptr)
             spi2jack->value2 = (float)atoi(buf) / MAX_RAW_IIO_VALUE_f * 10.0f;
         }
 
-        switch (exp_pedal_mode)
+        // handle mixer changes
+        if (spi2jack->mixer != NULL)
         {
-        case exp_pedal_mode_unused:
-            spi2jack->valuePedal = 0.0f;
-            break;
-        case exp_pedal_mode_port1:
-            spi2jack->valuePedal = spi2jack->value1;
-            break;
-        case exp_pedal_mode_port2:
-            spi2jack->valuePedal = spi2jack->value2;
-            break;
+            snd_mixer_handle_events(spi2jack->mixer);
+
+            if (_get_alsa_switch_value(spi2jack->mixerCvExpMode))
+            {
+                if (_get_alsa_switch_value(spi2jack->mixerExpPedalMode))
+                    spi2jack->exp_pedal_mode = exp_pedal_mode_port2;
+                else
+                    spi2jack->exp_pedal_mode = exp_pedal_mode_port1;
+            }
+            else
+            {
+                spi2jack->exp_pedal_mode = exp_pedal_mode_unused;
+            }
         }
     }
 
@@ -333,8 +319,8 @@ static int process_callback(jack_nframes_t nframes, void* arg)
 
     float* const port1buf = jack_port_get_buffer(spi2jack->port1, nframes);
     float* const port2buf = jack_port_get_buffer(spi2jack->port2, nframes);
+    float* const portPbuf = jack_port_get_buffer(spi2jack->portPedal, nframes);
 
-    // FIXME this is awful!
     if (spi2jack->ready)
     {
         const float value1     = spi2jack->value1;
@@ -362,11 +348,25 @@ static int process_callback(jack_nframes_t nframes, void* arg)
                 port2buf[i] = calculate_jack_value(value2, prevvalue2, i, bufsizelog);
             }
         }
+
+        switch (spi2jack->exp_pedal_mode)
+        {
+        case exp_pedal_mode_port1:
+            memcpy(portPbuf, port1buf, sizeof(float)*nframes);
+            break;
+        case exp_pedal_mode_port2:
+            memcpy(portPbuf, port2buf, sizeof(float)*nframes);
+            break;
+        default:
+            memset(portPbuf, 0, sizeof(float)*nframes);
+            break;
+        }
     }
     else
     {
         memset(port1buf, 0, sizeof(float)*nframes);
         memset(port2buf, 0, sizeof(float)*nframes);
+        memset(portPbuf, 0, sizeof(float)*nframes);
     }
 
     return 0;
@@ -425,6 +425,7 @@ int jack_initialize(jack_client_t* client, const char* load_init)
         return EXIT_FAILURE;
     }
 
+    spi2jack->exp_pedal_mode = exp_pedal_mode_unused;
     spi2jack->in1f = in1f;
     spi2jack->in2f = in2f;
     spi2jack->run = true;
@@ -571,6 +572,7 @@ void jack_finish(void* arg)
 
     jack_port_unregister(spi2jack->client, spi2jack->port1);
     jack_port_unregister(spi2jack->client, spi2jack->port2);
+    jack_port_unregister(spi2jack->client, spi2jack->portPedal);
     free(spi2jack);
 }
 
