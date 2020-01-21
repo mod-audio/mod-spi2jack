@@ -65,6 +65,7 @@ typedef struct {
   float value1, value2;
   float prevvalue1, prevvalue2;
   FILE *in1f, *in2f;
+  bool port_values_are_prescaled;
   volatile bool run, ready;
   volatile exp_pedal_mode_t exp_pedal_mode;
   pthread_t thread;
@@ -352,11 +353,29 @@ static int process_callback(jack_nframes_t nframes, void* arg)
         switch (spi2jack->exp_pedal_mode)
         {
         case exp_pedal_mode_port1:
-            memcpy(portPbuf, port1buf, sizeof(float)*nframes);
+            if (spi2jack->port_values_are_prescaled)
+            {
+                memcpy(portPbuf, port1buf, sizeof(float)*nframes);
+            }
+            else
+            {
+                for (jack_nframes_t i=0; i<nframes; ++i)
+                    portPbuf[i] = port1buf[i]*0.5f;
+            }
             break;
+
         case exp_pedal_mode_port2:
-            memcpy(portPbuf, port2buf, sizeof(float)*nframes);
+            if (spi2jack->port_values_are_prescaled)
+            {
+                memcpy(portPbuf, port2buf, sizeof(float)*nframes);
+            }
+            else
+            {
+                for (jack_nframes_t i=0; i<nframes; ++i)
+                    portPbuf[i] = port2buf[i]*0.5f;
+            }
             break;
+
         default:
             memset(portPbuf, 0, sizeof(float)*nframes);
             break;
@@ -424,6 +443,9 @@ int jack_initialize(jack_client_t* client, const char* load_init)
         fprintf(stderr, "Out of memory\n");
         return EXIT_FAILURE;
     }
+
+    // TODO if running under rk3399, set to true
+    spi2jack->port_values_are_prescaled = false;
 
     spi2jack->exp_pedal_mode = exp_pedal_mode_unused;
     spi2jack->in1f = in1f;
@@ -541,7 +563,7 @@ int jack_initialize(jack_client_t* client, const char* load_init)
         jack_set_property(client, uuidPedal, JACK_METADATA_SIGNAL_TYPE, "CV", "text/plain");
         jack_set_property(client, uuidPedal, JACK_METADATA_ORDER, "3", NULL);
         jack_set_property(client, uuidPedal, "http://lv2plug.in/ns/lv2core#minimum", "0", NULL);
-        jack_set_property(client, uuidPedal, "http://lv2plug.in/ns/lv2core#maximum", "10", NULL);
+        jack_set_property(client, uuidPedal, "http://lv2plug.in/ns/lv2core#maximum", "5", NULL);
     }
 
     // Set callbacks
