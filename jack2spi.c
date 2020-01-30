@@ -39,11 +39,6 @@
 #define ALSA_SOUNDCARD_DEFAULT_ID "DUOX"
 #define ALSA_CONTROL_HP_CV_MODE   "Headphone/CV Mode"
 
-/*
- * TODO:
- *  1. device number from args
- */
-
 // custom jack flag used for cv
 // needed because we prefer jack2 which doesn't always have working metadata
 #define JackPortIsControlVoltage 0x100
@@ -217,8 +212,22 @@ void jack_finish(void* arg);
 JACK_LIB_EXPORT
 int jack_initialize(jack_client_t* client, const char* load_init)
 {
-    FILE* const fname = fopen("/sys/bus/iio/devices/iio:device1/name", "rb");
+    if (load_init == NULL || load_init[0] == '\0')
+    {
+        load_init = getenv("MOD_JACK2SPI_DEVICE");
 
+        if (load_init == NULL || load_init[0] == '\0')
+        {
+          fprintf(stderr, "No spi device selected\n");
+          return EXIT_FAILURE;
+        }
+    }
+
+    char filename[512];
+    memset(filename, 0, sizeof(filename));
+
+    snprintf(filename, 511, "%s/name", load_init);
+    FILE* const fname = fopen(filename, "rb");
     if (!fname)
     {
       fprintf(stderr, "Cannot get iio device\n");
@@ -239,14 +248,16 @@ int jack_initialize(jack_client_t* client, const char* load_init)
 
     fclose(fname);
 
-    FILE* const out1f = fopen("/sys/bus/iio/devices/iio:device1/out_voltage0_raw", "wb");
+    snprintf(filename, 511, "%s/out_voltage0_raw", load_init);
+    FILE* const out1f = fopen(filename, "wb");
     if (!out1f)
     {
         fprintf(stderr, "Cannot get iio raw input 1 file\n");
         return EXIT_FAILURE;
     }
 
-    FILE* const out2f = fopen("/sys/bus/iio/devices/iio:device1/out_voltage1_raw", "wb");
+    snprintf(filename, 511, "%s/out_voltage1_raw", load_init);
+    FILE* const out2f = fopen(filename, "wb");
     if (!out2f)
     {
         fprintf(stderr, "Cannot get iio raw input 1 file\n");
@@ -373,9 +384,6 @@ int jack_initialize(jack_client_t* client, const char* load_init)
     fprintf(stdout, "All good, let's roll!\n");
 
     return EXIT_SUCCESS;
-
-    // TODO do something with `load_init`
-    (void)load_init;
 }
 
 JACK_LIB_EXPORT
@@ -399,6 +407,13 @@ void jack_finish(void* arg)
 
 int main(int argc, char* argv[])
 {
+    if (argc <= 1)
+    {
+        fprintf(stdout, "Usage: %s <bus-device>\n", argv[0]);
+        fprintf(stdout, "\tWhere bus-device is something like '/sys/bus/iio/devices/iio:device1'\n");
+        return EXIT_FAILURE;
+    }
+
     jack_client_t* const client = jack_client_open("mod-jack2spi", JackNoStartServer, NULL);
 
     if (!client)
@@ -407,7 +422,7 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
 
-    if (jack_initialize(client, argc > 1 ? argv[1] : "") != EXIT_SUCCESS)
+    if (jack_initialize(client, argv[1]) != EXIT_SUCCESS)
         return EXIT_FAILURE;
 
     while (1)
