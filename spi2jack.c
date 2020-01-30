@@ -323,55 +323,78 @@ static int process_callback(jack_nframes_t nframes, void* arg)
         const float value2     = spi2jack->value2;
         const float prevvalue1 = spi2jack->prevvalue1;
         const float prevvalue2 = spi2jack->prevvalue2;
+        const float epedalmult = spi2jack->port_values_are_prescaled ? 1.0f : 0.5f;
         spi2jack->prevvalue1   = value1;
         spi2jack->prevvalue2   = value2;
-
-        if (nframes == 128)
-        {
-            for (jack_nframes_t i=0; i<nframes; ++i)
-            {
-                port1buf[i] = calculate_jack_value_for_128_bufsize(value1, prevvalue1, i);
-                port2buf[i] = calculate_jack_value_for_128_bufsize(value2, prevvalue2, i);
-            }
-        }
-        else
-        {
-            const float bufsizelog = spi2jack->bufsize_log;
-
-            for (jack_nframes_t i=0; i<nframes; ++i)
-            {
-                port1buf[i] = calculate_jack_value(value1, prevvalue1, i, bufsizelog);
-                port2buf[i] = calculate_jack_value(value2, prevvalue2, i, bufsizelog);
-            }
-        }
 
         switch (spi2jack->exp_pedal_mode)
         {
         case exp_pedal_mode_port1:
-            if (spi2jack->port_values_are_prescaled)
+            // cv1
+            memset(port1buf, 0, sizeof(float)*nframes);
+
+            // cv2
+            memset(port2buf, 0, sizeof(float)*nframes);
+
+            // exp.pedal
+            if (nframes == 128)
             {
-                memcpy(portPbuf, port1buf, sizeof(float)*nframes);
+                for (jack_nframes_t i=0; i<nframes; ++i)
+                    portPbuf[i] = calculate_jack_value_for_128_bufsize(value1, prevvalue1, i) * epedalmult;
             }
             else
             {
+                const float bufsizelog = spi2jack->bufsize_log;
+
                 for (jack_nframes_t i=0; i<nframes; ++i)
-                    portPbuf[i] = port1buf[i]*0.5f;
+                    portPbuf[i] = calculate_jack_value(value1, prevvalue1, i, bufsizelog) * epedalmult;
             }
             break;
 
         case exp_pedal_mode_port2:
-            if (spi2jack->port_values_are_prescaled)
+            // cv1
+            memset(port1buf, 0, sizeof(float)*nframes);
+
+            // cv2
+            memset(port2buf, 0, sizeof(float)*nframes);
+
+            // exp.pedal
+            if (nframes == 128)
             {
-                memcpy(portPbuf, port2buf, sizeof(float)*nframes);
+                for (jack_nframes_t i=0; i<nframes; ++i)
+                    portPbuf[i] = calculate_jack_value_for_128_bufsize(value2, prevvalue2, i) * epedalmult;
             }
             else
             {
+                const float bufsizelog = spi2jack->bufsize_log;
+
                 for (jack_nframes_t i=0; i<nframes; ++i)
-                    portPbuf[i] = port2buf[i]*0.5f;
+                    portPbuf[i] = calculate_jack_value(value2, prevvalue2, i, bufsizelog) * epedalmult;
             }
             break;
 
         default:
+            // cv1 and 2
+            if (nframes == 128)
+            {
+                for (jack_nframes_t i=0; i<nframes; ++i)
+                {
+                    port1buf[i] = calculate_jack_value_for_128_bufsize(value1, prevvalue1, i);
+                    port2buf[i] = calculate_jack_value_for_128_bufsize(value2, prevvalue2, i);
+                }
+            }
+            else
+            {
+                const float bufsizelog = spi2jack->bufsize_log;
+
+                for (jack_nframes_t i=0; i<nframes; ++i)
+                {
+                    port1buf[i] = calculate_jack_value(value1, prevvalue1, i, bufsizelog);
+                    port2buf[i] = calculate_jack_value(value2, prevvalue2, i, bufsizelog);
+                }
+            }
+
+            // exp.pedal
             memset(portPbuf, 0, sizeof(float)*nframes);
             break;
         }
@@ -455,8 +478,8 @@ int jack_initialize(jack_client_t* client, const char* load_init)
         return EXIT_FAILURE;
     }
 
-    // TODO if running under rk3399, set to true
-    spi2jack->port_values_are_prescaled = false;
+    // FIXME better way to set this. for now, it works..
+    spi2jack->port_values_are_prescaled = getenv("MOD_SPI2JACK_PRESCALED") != NULL;
 
     spi2jack->exp_pedal_mode = exp_pedal_mode_unused;
     spi2jack->in1f = in1f;
