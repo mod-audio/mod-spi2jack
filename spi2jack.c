@@ -466,7 +466,7 @@ int jack_initialize(jack_client_t* client, const char* load_init)
     FILE* const in2f = fopen(filename, "rb");
     if (!in2f)
     {
-        fprintf(stderr, "Cannot get iio raw input 1 file\n");
+        fprintf(stderr, "Cannot get iio raw input 2 file\n");
         fclose(in2f);
         return EXIT_FAILURE;
     }

@@ -252,7 +252,7 @@ int jack_initialize(jack_client_t* client, const char* load_init)
     FILE* const out1f = fopen(filename, "wb");
     if (!out1f)
     {
-        fprintf(stderr, "Cannot get iio raw input 1 file\n");
+        fprintf(stderr, "Cannot get iio raw output 1 file\n");
         return EXIT_FAILURE;
     }
 
@@ -260,7 +260,7 @@ int jack_initialize(jack_client_t* client, const char* load_init)
     FILE* const out2f = fopen(filename, "wb");
     if (!out2f)
     {
-        fprintf(stderr, "Cannot get iio raw input 1 file\n");
+        fprintf(stderr, "Cannot get iio raw output 2 file\n");
         fclose(out2f);
         return EXIT_FAILURE;
     }
