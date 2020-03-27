@@ -15,6 +15,9 @@
  * along with mod-spi2jack.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+// NOTE using sem_post seems expensive?? can be disabled if timing is not so important
+#define USE_SEMAPHORE
+
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,7 +37,11 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#ifdef USE_SEMAPHORE
 #include "mod-semaphore.h"
+#else
+#include <stdatomic.h>
+#endif
 
 #define ALSA_SOUNDCARD_DEFAULT_ID "DUOX"
 #define ALSA_CONTROL_HP_CV_MODE   "Headphone/CV Mode"
@@ -55,8 +62,13 @@ typedef struct {
   float* tmpSortArray;
   volatile bool run;
   volatile bool cvEnabled;
+  bool wasEnabled;
   pthread_t thread;
+#ifdef USE_SEMAPHORE
   sem_t sem;
+#else
+  atomic_bool has_data;
+#endif
   // for knowing wherever the cv/hp mode is enabled or not
   snd_mixer_t* mixer;
   snd_mixer_elem_t* mixerElem;
@@ -89,35 +101,39 @@ static void* write_spi_thread(void* ptr)
             jack2spi->cvEnabled = _get_alsa_switch_value(jack2spi->mixerElem);
         }
 
+#ifdef USE_SEMAPHORE
         if (sem_timedwait_secs(&jack2spi->sem, 1) != 0)
             continue;
+#else
+        if (! atomic_load(&jack2spi->has_data))
+        {
+            usleep(1000); // 1ms
+            continue;
+        }
+#endif
 
         // read the values as soon as we get unlocked
         value1 = jack2spi->value1;
         value2 = jack2spi->value2;
+#ifndef USE_SEMAPHORE
+        atomic_store(&jack2spi->has_data, false);
+#endif
 
-        if (jack2spi->cvEnabled)
-        {
-            // out1
-            if (value1 <= 0.0f)
-                rvalue1 = 0;
-            else if (value1 >= 10.0f)
-                rvalue1 = MAX_RAW_IIO_VALUE;
-            else
-                rvalue1 = (uint16_t)(int)(value1 / 10.0f * MAX_RAW_IIO_VALUE_f + 0.5f);
-
-            // out2
-            if (value2 <= 0.0f)
-                rvalue2 = 0;
-            else if (value2 >= 10.0f)
-                rvalue2 = MAX_RAW_IIO_VALUE;
-            else
-                rvalue2 = (uint16_t)(int)(value2 / 10.0f * MAX_RAW_IIO_VALUE_f + 0.5f);
-        }
+        // out1
+        if (value1 <= 0.0f)
+            rvalue1 = 0;
+        else if (value1 >= 10.0f)
+            rvalue1 = MAX_RAW_IIO_VALUE;
         else
-        {
-            rvalue1 = rvalue2 = 0;
-        }
+            rvalue1 = (uint16_t)(int)(value1 / 10.0f * MAX_RAW_IIO_VALUE_f + 0.5f);
+
+        // out2
+        if (value2 <= 0.0f)
+            rvalue2 = 0;
+        else if (value2 >= 10.0f)
+            rvalue2 = MAX_RAW_IIO_VALUE;
+        else
+            rvalue2 = (uint16_t)(int)(value2 / 10.0f * MAX_RAW_IIO_VALUE_f + 0.5f);
 
         if (snprintf(buf, sizeof(buf), "%u\n", rvalue1) >= (int)sizeof(buf)-1)
         {
@@ -187,18 +203,43 @@ static int process_callback(jack_nframes_t nframes, void* arg)
 
     if (jack2spi->cvEnabled)
     {
-        const float* const port1buf = jack_port_get_buffer(jack2spi->port1, nframes);
-        const float* const port2buf = jack_port_get_buffer(jack2spi->port2, nframes);
+        if (jack_port_connected(jack2spi->port1) > 0)
+        {
+            const float* const port1buf = jack_port_get_buffer(jack2spi->port1, nframes);
+            jack2spi->value1 = get_median_value(jack2spi->tmpSortArray, port1buf, nframes);
+        }
+        else
+        {
+            jack2spi->value1 = 0.0f;
+        }
 
-        jack2spi->value1 = get_median_value(jack2spi->tmpSortArray, port1buf, nframes);
-        jack2spi->value2 = get_median_value(jack2spi->tmpSortArray, port2buf, nframes);
+        if (jack_port_connected(jack2spi->port2) > 0)
+        {
+            const float* const port2buf = jack_port_get_buffer(jack2spi->port2, nframes);
+            jack2spi->value2 = get_median_value(jack2spi->tmpSortArray, port2buf, nframes);
+        }
+        else
+        {
+            jack2spi->value2 = 0.0f;
+        }
+
+        jack2spi->wasEnabled = true;
+    }
+    else if (jack2spi->wasEnabled)
+    {
+        jack2spi->value1 = jack2spi->value2 = 0.0f;
+        jack2spi->wasEnabled = false;
     }
     else
     {
-        jack2spi->value1 = jack2spi->value2 = 0.0f;
+        return 0;
     }
 
+#ifdef USE_SEMAPHORE
     sem_post(&jack2spi->sem);
+#else
+    atomic_store(&jack2spi->has_data, true);
+#endif
 
     return 0;
 }
@@ -276,7 +317,9 @@ int jack_initialize(jack_client_t* client, const char* load_init)
     jack2spi->out2f = out2f;
     jack2spi->run = true;
 
+#ifdef USE_SEMAPHORE
     sem_init(&jack2spi->sem, 0, 0);
+#endif
 
     // setup alsa-mixer listener
     if (snd_mixer_open(&jack2spi->mixer, SND_MIXER_ELEM_SIMPLE) == 0)
@@ -398,7 +441,9 @@ void jack_finish(void* arg)
     fclose(jack2spi->out1f);
     fclose(jack2spi->out2f);
     snd_mixer_close(jack2spi->mixer);
+#ifdef USE_SEMAPHORE
     sem_destroy(&jack2spi->sem);
+#endif
 
     jack_port_unregister(jack2spi->client, jack2spi->port1);
     jack_port_unregister(jack2spi->client, jack2spi->port2);
