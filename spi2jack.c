@@ -64,7 +64,7 @@ typedef struct {
   volatile bool run, ready;
   volatile exp_pedal_mode_t exp_pedal_mode;
   pthread_t thread;
-  jack_nframes_t bufsize_ns;
+  jack_nframes_t bufsize_us;
   float bufsize_log;
   // for knowing whichever exp.pedal mode we are on
   snd_mixer_t* mixer;
@@ -108,7 +108,7 @@ static void* read_spi_thread(void* ptr)
 
     while (spi2jack->run)
     {
-        usleep(spi2jack->bufsize_ns);
+        usleep(spi2jack->bufsize_us / 2);
 
         rewind(in1f);
         memset(buf, 0, sizeof(buf));
@@ -144,6 +144,12 @@ static void* read_spi_thread(void* ptr)
             {
                 spi2jack->exp_pedal_mode = exp_pedal_mode_unused;
             }
+
+            usleep(spi2jack->bufsize_us / 4);
+        }
+        else
+        {
+            usleep(spi2jack->bufsize_us / 2);
         }
     }
 
@@ -154,7 +160,7 @@ static int buffer_size_callback(jack_nframes_t bufsize, void* arg)
 {
     spi2jack_t* const spi2jack = (spi2jack_t*)arg;
 
-    spi2jack->bufsize_ns = bufsize / jack_get_sample_rate(spi2jack->client);
+    spi2jack->bufsize_us = (double)bufsize / (double)jack_get_sample_rate(spi2jack->client) * 1000000.0;
     spi2jack->bufsize_log = logf((float)bufsize);
     return 0;
 }
@@ -323,34 +329,12 @@ static int process_callback(jack_nframes_t nframes, void* arg)
         const float value2     = spi2jack->value2;
         const float prevvalue1 = spi2jack->prevvalue1;
         const float prevvalue2 = spi2jack->prevvalue2;
-        const float epedalmult = spi2jack->port_values_are_prescaled ? 1.0f : 0.5f;
         spi2jack->prevvalue1   = value1;
         spi2jack->prevvalue2   = value2;
 
         switch (spi2jack->exp_pedal_mode)
         {
         case exp_pedal_mode_port1:
-            // cv1
-            memset(port1buf, 0, sizeof(float)*nframes);
-
-            // cv2
-            memset(port2buf, 0, sizeof(float)*nframes);
-
-            // exp.pedal
-            if (nframes == 128)
-            {
-                for (jack_nframes_t i=0; i<nframes; ++i)
-                    portPbuf[i] = calculate_jack_value_for_128_bufsize(value1, prevvalue1, i) * epedalmult;
-            }
-            else
-            {
-                const float bufsizelog = spi2jack->bufsize_log;
-
-                for (jack_nframes_t i=0; i<nframes; ++i)
-                    portPbuf[i] = calculate_jack_value(value1, prevvalue1, i, bufsizelog) * epedalmult;
-            }
-            break;
-
         case exp_pedal_mode_port2:
             // cv1
             memset(port1buf, 0, sizeof(float)*nframes);
@@ -359,39 +343,83 @@ static int process_callback(jack_nframes_t nframes, void* arg)
             memset(port2buf, 0, sizeof(float)*nframes);
 
             // exp.pedal
-            if (nframes == 128)
+            if (jack_port_connected(spi2jack->portPedal) > 0)
             {
-                for (jack_nframes_t i=0; i<nframes; ++i)
-                    portPbuf[i] = calculate_jack_value_for_128_bufsize(value2, prevvalue2, i) * epedalmult;
+                const float epedalmult = spi2jack->port_values_are_prescaled ? 1.0f : 0.5f;
+
+                float valueexp, prevvalueexp;
+
+                if (spi2jack->exp_pedal_mode == exp_pedal_mode_port1)
+                {
+                    valueexp = value1;
+                    prevvalueexp = prevvalue1;
+                }
+                else
+                {
+                    valueexp = value2;
+                    prevvalueexp = prevvalue2;
+                }
+
+                if (nframes == 128)
+                {
+                    for (jack_nframes_t i=0; i<nframes; ++i)
+                        portPbuf[i] = calculate_jack_value_for_128_bufsize(valueexp, prevvalueexp, i) * epedalmult;
+                }
+                else
+                {
+                    const float bufsizelog = spi2jack->bufsize_log;
+
+                    for (jack_nframes_t i=0; i<nframes; ++i)
+                        portPbuf[i] = calculate_jack_value(valueexp, prevvalueexp, i, bufsizelog) * epedalmult;
+                }
             }
             else
             {
-                const float bufsizelog = spi2jack->bufsize_log;
-
-                for (jack_nframes_t i=0; i<nframes; ++i)
-                    portPbuf[i] = calculate_jack_value(value2, prevvalue2, i, bufsizelog) * epedalmult;
+                memset(portPbuf, 0, sizeof(float)*nframes);
             }
             break;
 
         default:
-            // cv1 and 2
-            if (nframes == 128)
+            // cv1
+            if (jack_port_connected(spi2jack->port1) > 0)
             {
-                for (jack_nframes_t i=0; i<nframes; ++i)
+                if (nframes == 128)
                 {
-                    port1buf[i] = calculate_jack_value_for_128_bufsize(value1, prevvalue1, i);
-                    port2buf[i] = calculate_jack_value_for_128_bufsize(value2, prevvalue2, i);
+                    for (jack_nframes_t i=0; i<nframes; ++i)
+                        port1buf[i] = calculate_jack_value_for_128_bufsize(value1, prevvalue1, i);
+                }
+                else
+                {
+                    const float bufsizelog = spi2jack->bufsize_log;
+
+                    for (jack_nframes_t i=0; i<nframes; ++i)
+                        port1buf[i] = calculate_jack_value(value1, prevvalue1, i, bufsizelog);
                 }
             }
             else
             {
-                const float bufsizelog = spi2jack->bufsize_log;
+                memset(port1buf, 0, sizeof(float)*nframes);
+            }
 
-                for (jack_nframes_t i=0; i<nframes; ++i)
+            // cv2
+            if (jack_port_connected(spi2jack->port2) > 0)
+            {
+                if (nframes == 128)
                 {
-                    port1buf[i] = calculate_jack_value(value1, prevvalue1, i, bufsizelog);
-                    port2buf[i] = calculate_jack_value(value2, prevvalue2, i, bufsizelog);
+                    for (jack_nframes_t i=0; i<nframes; ++i)
+                        port2buf[i] = calculate_jack_value_for_128_bufsize(value2, prevvalue2, i);
                 }
+                else
+                {
+                    const float bufsizelog = spi2jack->bufsize_log;
+
+                    for (jack_nframes_t i=0; i<nframes; ++i)
+                        port2buf[i] = calculate_jack_value(value2, prevvalue2, i, bufsizelog);
+                }
+            }
+            else
+            {
+                memset(port2buf, 0, sizeof(float)*nframes);
             }
 
             // exp.pedal
@@ -546,7 +574,7 @@ int jack_initialize(jack_client_t* client, const char* load_init)
     spi2jack->client = client;
 
     const jack_nframes_t bufsize = jack_get_buffer_size(client);
-    spi2jack->bufsize_ns = bufsize / jack_get_sample_rate(spi2jack->client);
+    spi2jack->bufsize_us = (double)bufsize / (double)jack_get_sample_rate(spi2jack->client) * 1000000.0;
     spi2jack->bufsize_log = logf((float)bufsize);
 
     // Register ports.
